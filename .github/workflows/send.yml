@@ -12,10 +12,10 @@ on:
       dry_run:
         description: Only verify login and friends without sending
         type: boolean
-        default: true
+        default: false
 
   schedule:
-    - cron: "30 22 * * *"
+    - cron: "37 22 * * *"
       timezone: "Asia/Shanghai"
 
 concurrency:
