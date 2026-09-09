@@ -1,5 +1,11 @@
 name: Send Douyin Messages
 
+# ⚠️ 触发方式二选一（重要）：
+# 1) 如果你用 GitHub Actions 自带的 schedule：保留下面的 schedule 块，
+#    并到 cron-job.org（或其他外部 cron）里停用/删除对应任务，避免一天跑两次。
+# 2) 如果你用 cron-job.org 等外部 cron 触发 workflow_dispatch：
+#    把下面的 schedule 整段注释掉，只保留 workflow_dispatch。
+# 项目文档 docs/github-actions.md 第 8 节也明确建议：两种定时只保留一种。
 on:
   workflow_dispatch:
     inputs:
@@ -7,9 +13,9 @@ on:
         description: Only verify login and friends without sending
         type: boolean
         default: false
- 
+
   schedule:
-    - cron: "23 5 * * *"
+    - cron: "30 22 * * *"
       timezone: "Asia/Shanghai"
 
 concurrency:
@@ -19,7 +25,7 @@ concurrency:
 jobs:
   send:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     permissions:
       contents: read
     env:
@@ -113,10 +119,38 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" == "true" ]]; then
-            python run.py --dry-run
+            RUN_ARGS="--dry-run"
+            echo "本次为 Dry Run（只检查，不发送）"
           else
-            python run.py
+            RUN_ARGS=""
+            echo "本次为正式发送"
           fi
+
+          # GitHub 自带 schedule 偶尔会延迟或瞬时失败（页面超时、网络抖动等）。
+          # 失败时自动重试，最多 3 次，间隔 90 秒。
+          # code=2 表示配置/登录/风控类错误（Cookie 失效、安全验证、找不到好友搜索框等），
+          # 立即重试通常没用甚至可能加重风控，因此不重试、直接失败并上传诊断。
+          max_attempts=3
+          attempt=1
+          while true; do
+            echo "===== 第 ${attempt}/${max_attempts} 次执行: python run.py ${RUN_ARGS} ====="
+            if python run.py $RUN_ARGS; then
+              echo "===== 执行成功 ====="
+              exit 0
+            fi
+            code=$?
+            if [[ $code -eq 2 ]]; then
+              echo "配置/登录/风控类错误 (code=2)，重试无意义，直接退出"
+              exit 2
+            fi
+            if [[ $attempt -ge $max_attempts ]]; then
+              echo "已达最大重试次数 ${max_attempts}，最后一次退出码: ${code}"
+              exit $code
+            fi
+            echo "执行失败 (code=${code})，90 秒后进行第 $((attempt+1)) 次重试..."
+            attempt=$((attempt+1))
+            sleep 90
+          done
       - name: Upload diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
